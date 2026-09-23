@@ -1,0 +1,70 @@
+# Zakadi repository standard: ci.yml for @zakadi/node (npm). The commands are the ones
+# in lefthook.yml, through the package scripts: format (prettier --check .), lint
+# (eslint . && tsc --noEmit), test (the unit tests, on Node 24 and on Node 20, the
+# engines floor) and test:integration (against a fake API on node:http).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run format
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  # One job, so branch protection sees the name unit; it runs the suite on both Node
+  # versions the package supports.
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: npm test on Node 24
+        run: npm test
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+      - name: npm test on Node 20
+        run: npm test
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:integration --if-present
