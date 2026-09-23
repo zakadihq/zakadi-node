@@ -127,8 +127,9 @@ describe("@zakadi/node against a fake API on node:http", () => {
     );
   });
 
-  it("fetches the JWKS once, and again when a token names an unknown kid", async () => {
-    const [k1, k2] = [signingKey("k1"), signingKey("k2")];
+  it("fetches the JWKS once, and again when a token names an unknown kid at most once per 60 s", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const [k1, k2, k3] = [signingKey("k1"), signingKey("k2"), signingKey("k3")];
     let published = [k1];
     api.reply = () => ({ body: { keys: published.map((key) => key.jwk) } });
     const zakadi = client();
@@ -136,10 +137,22 @@ describe("@zakadi/node against a fake API on node:http", () => {
     await zakadi.results.verifyToken(signToken(k1, resultClaims()));
     assert.equal(api.requests.length, 1);
     published = [k1, k2];
+    await assert.rejects(
+      zakadi.results.verifyToken(signToken(k2, resultClaims())),
+      VerificationError,
+    );
+    assert.equal(api.requests.length, 1);
+    t.mock.timers.tick(60_000);
     await zakadi.results.verifyToken(signToken(k2, resultClaims()));
     assert.equal(api.requests.length, 2);
     await assert.rejects(
-      zakadi.results.verifyToken(signToken(signingKey("k3"), resultClaims())),
+      zakadi.results.verifyToken(signToken(k3, resultClaims())),
+      VerificationError,
+    );
+    assert.equal(api.requests.length, 2);
+    t.mock.timers.tick(60_000);
+    await assert.rejects(
+      zakadi.results.verifyToken(signToken(k3, resultClaims())),
       VerificationError,
     );
     assert.equal(api.requests.length, 3);
@@ -147,6 +160,22 @@ describe("@zakadi/node against a fake API on node:http", () => {
       assert.equal(request.path, "/.well-known/jwks.json");
       assert.equal(request.headers.authorization, undefined);
     }
+  });
+
+  it("shares one JWKS request between concurrent verifications", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const [k1, k2] = [signingKey("k1"), signingKey("k2")];
+    let published = [k1];
+    api.reply = () => ({ body: { keys: published.map((key) => key.jwk) } });
+    const zakadi = client();
+    const verify = (key) =>
+      zakadi.results.verifyToken(signToken(key, resultClaims()));
+    await Promise.all([verify(k1), verify(k1), verify(k1)]);
+    assert.equal(api.requests.length, 1);
+    published = [k1, k2];
+    t.mock.timers.tick(60_000);
+    await Promise.all([verify(k2), verify(k2), verify(k1), verify(k2)]);
+    assert.equal(api.requests.length, 2);
   });
 
   it("verifies a webhook delivered to a node:http receiver", async (t) => {
