@@ -1,0 +1,52 @@
+{
+  "name": "@zakadi/node",
+  "version": "0.0.0",
+  "description": "Server-side client for the Zakadi API for Node.js 20 and later: sessions, results, result-token and webhook verification",
+  "main": "./dist/index.js",
+  "scripts": {
+    "test": "npm run build && node --test test/unit/*.test.js",
+    "build": "tsc",
+    "format": "prettier --check .",
+    "lint": "eslint . && tsc --noEmit",
+    "test:integration": "npm run build && node --test test/integration/*.test.js",
+    "prepack": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zakadihq/zakadi-node.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/zakadihq/zakadi-node/issues"
+  },
+  "homepage": "https://github.com/zakadihq/zakadi-node#readme",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^20.19.43",
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0",
+    "lefthook": "^2.1.14",
+    "prettier": "^3.9.9",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1"
+  },
+  "allowScripts": {
+    "lefthook": true
+  }
+}
