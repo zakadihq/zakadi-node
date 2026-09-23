@@ -1,7 +1,10 @@
 # Zakadi repository standard: ci.yml for @zakadi/node (npm). The commands are the ones
 # in lefthook.yml, through the package scripts: format (prettier --check .), lint
 # (eslint . && tsc --noEmit), test (the unit tests, on Node 24 and on Node 20, the
-# engines floor) and test:integration (against a fake API on node:http).
+# engines floor) and test:integration (against a fake API on node:http). The lint job
+# ends with the scan (CI only, references/GITHUB.md of the standard): the licence of
+# every production dependency, from npm query, against the excluded list of spec 00
+# 0.10, then npm audit over the same dependencies.
 name: ci
 
 on:
@@ -38,6 +41,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      - name: scan
+        shell: bash
+        env:
+          EXCLUDED_LICENCES: "(^|[^[:alnum:]])(A?GPL|SSPL|RSAL)|GNU (Affero )?General Public|Server Side Public|Redis Source Available|-NC([^[:alnum:]]|$)|[Nn]on[- ]?[Cc]ommercial|FoxIO"
+        run: |
+          npm query .prod | jq -r '.[] | "\(.name)@\(.version) \(.license // .licenses // "unknown")"' | tee "$RUNNER_TEMP/licences.txt"
+          if grep -E "$EXCLUDED_LICENCES" "$RUNNER_TEMP/licences.txt"; then
+            echo "scan: a licence excluded by spec 00 0.10 is listed above" >&2
+            exit 1
+          fi
+          npm audit --omit=dev
 
   # One job, so branch protection sees the name unit; it runs the suite on both Node
   # versions the package supports.
