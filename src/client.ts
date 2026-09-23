@@ -24,6 +24,12 @@ const MAX_RETRIES = 2;
 const MAX_RETRY_AFTER_MS = 60_000;
 /** The first backoff without a Retry-After, jittered below it and doubled per retry. */
 const BACKOFF_MS = 500;
+/**
+ * The least age of the last JWKS request, failed or not, before a token naming a `kid`
+ * the cached JWKS lacks refetches it (2.11, D78). A key is published 24 h before it
+ * signs (spec/03-backend-services.md 3.11), so the floor refuses no legitimate token.
+ */
+const JWKS_REFETCH_FLOOR_MS = 60_000;
 
 /** The options of `new Zakadi(...)`. */
 interface Options {
@@ -91,7 +97,12 @@ class Sessions {
 
 class Results {
   readonly #transport: Transport;
-  #keys: Promise<Map<string, KeyObject>> | undefined;
+  /** The keys of the last JWKS fetched; a failed refetch leaves them in place. */
+  #keys: Map<string, KeyObject> | undefined;
+  /** The JWKS request in flight, which concurrent verifications share. */
+  #request: Promise<Map<string, KeyObject>> | undefined;
+  /** `Date.now()` when the last JWKS request was sent, whatever its outcome. */
+  #requestedAt = -Infinity;
 
   constructor(transport: Transport) {
     this.#transport = transport;
@@ -100,7 +111,11 @@ class Results {
   /**
    * Resolves to the claims of `token` when it is an unexpired ES256 JWS signed by a key
    * of `/.well-known/jwks.json` (2.3, 2.8); throws `VerificationError` otherwise. The
-   * JWKS is fetched once, and again when a token names an unknown `kid` (2.11).
+   * JWKS is fetched once and cached (2.11). A token naming a `kid` the cached JWKS lacks
+   * refetches it when the last JWKS request, failed or not, is at least 60 s old, and
+   * otherwise throws `VerificationError` without a request (D78). Concurrent
+   * verifications share one request; a failed refetch throws its `ApiError` and keeps
+   * the cached keys. While no JWKS is cached, every token fetches it.
    */
   async verifyToken(token: string): Promise<ResultTokenClaims> {
     const claims = await verifyEs256(token, (kid) => this.#key(kid));
@@ -108,23 +123,28 @@ class Results {
   }
 
   async #key(kid: string): Promise<KeyObject | undefined> {
-    try {
-      const known = await (this.#keys ??= this.#fetchKeys());
-      if (known.has(kid)) {
-        return known.get(kid);
-      }
-      return (await (this.#keys = this.#fetchKeys())).get(kid);
-    } catch (error) {
-      // A failed fetch is not kept: the next token fetches the JWKS again.
-      this.#keys = undefined;
-      throw error;
+    const cached = this.#keys?.get(kid);
+    if (cached !== undefined) {
+      return cached;
     }
+    if (
+      this.#request === undefined &&
+      this.#keys !== undefined &&
+      Date.now() - this.#requestedAt < JWKS_REFETCH_FLOOR_MS
+    ) {
+      // Inside the floor: no request, and verifyEs256 throws VerificationError.
+      return undefined;
+    }
+    this.#request ??= this.#fetchKeys().finally(() => {
+      this.#request = undefined;
+    });
+    return (await this.#request).get(kid);
   }
 
   async #fetchKeys(): Promise<Map<string, KeyObject>> {
-    return es256Keys(
-      await this.#transport.request("GET", "/.well-known/jwks.json"),
-    );
+    this.#requestedAt = Date.now();
+    const jwks = await this.#transport.request("GET", "/.well-known/jwks.json");
+    return (this.#keys = es256Keys(jwks));
   }
 }
 

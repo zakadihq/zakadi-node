@@ -1,5 +1,6 @@
 // results.verifyToken against a replaced fetch serving the JWKS: spec/02-api.md 2.3,
-// 2.8 and the JWKS caching rule of 2.11.
+// 2.8 and the JWKS caching rule of 2.11 with its 60 s refetch floor (D78). The floor
+// tests move Date with the mock timers of node:test, so none of them waits.
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { describe, it } from "node:test";
@@ -44,10 +45,12 @@ describe("results.verifyToken", () => {
     assert.equal(calls.length, 1);
   });
 
-  it("fetches the JWKS again when a token names an unknown kid", async (t) => {
+  it("fetches the JWKS again when a token names an unknown kid 60 s after the last request", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const calls = fakeFetch(t, (_, n) => (n === 1 ? jwks(k1) : jwks(k1, k2)));
     const zakadi = client();
     await zakadi.results.verifyToken(signToken(k1, resultClaims()));
+    t.mock.timers.tick(60_000);
     const claims = resultClaims();
     assert.deepEqual(
       await zakadi.results.verifyToken(signToken(k2, claims)),
@@ -58,11 +61,73 @@ describe("results.verifyToken", () => {
   });
 
   it("throws VerificationError when the kid is still unknown after the refetch", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
     const calls = fakeFetch(t, () => jwks(k1));
+    const zakadi = client();
     await assert.rejects(
-      client().results.verifyToken(signToken(k2, resultClaims())),
+      zakadi.results.verifyToken(signToken(k2, resultClaims())),
       VerificationError,
     );
+    assert.equal(calls.length, 1);
+    t.mock.timers.tick(60_000);
+    await assert.rejects(
+      zakadi.results.verifyToken(signToken(k2, resultClaims())),
+      VerificationError,
+    );
+    assert.equal(calls.length, 2);
+  });
+
+  it("throws VerificationError without a request on an unknown kid within 60 s of the last JWKS request", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const calls = fakeFetch(t, (_, n) => (n === 1 ? jwks(k1) : jwks(k1, k2)));
+    const zakadi = client();
+    await zakadi.results.verifyToken(signToken(k1, resultClaims()));
+    await assert.rejects(
+      zakadi.results.verifyToken(signToken(k2, resultClaims())),
+      VerificationError,
+    );
+    t.mock.timers.tick(59_999);
+    await assert.rejects(
+      zakadi.results.verifyToken(signToken(k2, resultClaims())),
+      VerificationError,
+    );
+    assert.equal(calls.length, 1);
+    t.mock.timers.tick(1);
+    const claims = resultClaims();
+    assert.deepEqual(
+      await zakadi.results.verifyToken(signToken(k2, claims)),
+      claims,
+    );
+    assert.equal(calls.length, 2);
+    await assert.rejects(
+      zakadi.results.verifyToken(signToken(signingKey("k3"), resultClaims())),
+      VerificationError,
+    );
+    assert.equal(calls.length, 2);
+  });
+
+  it("shares one JWKS request between concurrent verifications, for the first fetch and for a refetch", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    const k3 = signingKey("k3");
+    const calls = fakeFetch(t, (_, n) =>
+      n === 1 ? jwks(k1) : jwks(k1, k2, k3),
+    );
+    const zakadi = client();
+    const verify = (key) =>
+      zakadi.results.verifyToken(signToken(key, resultClaims()));
+    const first = await Promise.allSettled([
+      verify(k1),
+      verify(k2),
+      verify(k1),
+    ]);
+    assert.deepEqual(
+      first.map((outcome) => outcome.status),
+      ["fulfilled", "rejected", "fulfilled"],
+    );
+    assert.ok(first[1].reason instanceof VerificationError);
+    assert.equal(calls.length, 1);
+    t.mock.timers.tick(60_000);
+    await Promise.all([verify(k2), verify(k3), verify(k2), verify(k1)]);
     assert.equal(calls.length, 2);
   });
 
@@ -156,6 +221,40 @@ describe("results.verifyToken", () => {
       claims,
     );
     assert.equal(calls.length, 4);
+  });
+
+  it("keeps the cached keys when a refetch fails, and the floor runs from the failed request", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    let reply = () => jwks(k1);
+    const calls = fakeFetch(t, () => reply());
+    const zakadi = client();
+    await zakadi.results.verifyToken(signToken(k1, resultClaims()));
+    t.mock.timers.tick(60_000);
+    reply = () => problem(503, "internal_error", { "retry-after": "0" });
+    await assert.rejects(
+      zakadi.results.verifyToken(signToken(k2, resultClaims())),
+      { name: "ApiError", status: 503, code: "internal_error" },
+    );
+    // One JWKS request: the refetch and its two retries of the 503.
+    assert.equal(calls.length, 4);
+    reply = () => jwks(k1, k2);
+    const claims = resultClaims();
+    assert.deepEqual(
+      await zakadi.results.verifyToken(signToken(k1, claims)),
+      claims,
+    );
+    t.mock.timers.tick(59_999);
+    await assert.rejects(
+      zakadi.results.verifyToken(signToken(k2, resultClaims())),
+      VerificationError,
+    );
+    assert.equal(calls.length, 4);
+    t.mock.timers.tick(1);
+    assert.deepEqual(
+      await zakadi.results.verifyToken(signToken(k2, claims)),
+      claims,
+    );
+    assert.equal(calls.length, 5);
   });
 
   it("skips JWKS entries that cannot verify ES256", async (t) => {
