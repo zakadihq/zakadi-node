@@ -1,8 +1,7 @@
-// The Zakadi client of spec/02-api.md 2.11: the HTTP layer with its retry rules, and the
-// sessions, results and webhooks calls, on fetch and node:crypto alone.
+// The Zakadi client of spec/02-api.md 2.11: the sessions, results and webhooks calls
+// over the transport of src/transport.ts, on fetch and node:crypto alone.
 import { randomUUID, type KeyObject } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
-import { ApiError, ResultPending } from "./errors.js";
+import { Transport } from "./transport.js";
 import type {
   Result,
   ResultTokenClaims,
@@ -18,12 +17,6 @@ import {
 } from "./verify.js";
 
 const DEFAULT_BASE_URL = "https://api.zakadi.dev";
-/** Retries after the first attempt, on 429 and 5xx only (2.11). */
-const MAX_RETRIES = 2;
-/** A Retry-After longer than this is not waited out: the ApiError is thrown. */
-const MAX_RETRY_AFTER_MS = 60_000;
-/** The first backoff without a Retry-After, jittered below it and doubled per retry. */
-const BACKOFF_MS = 500;
 /**
  * The least age of the last JWKS request, failed or not, before a token naming a `kid`
  * the cached JWKS lacks refetches it (2.11, D78). A key is published 24 h before it
@@ -78,9 +71,18 @@ class Sessions {
     options: { idempotencyKey?: string } = {},
   ): Promise<Session> {
     const idempotencyKey = options.idempotencyKey ?? randomUUID();
-    return (await this.#transport.request("POST", "/v1/sessions", body, {
-      "idempotency-key": idempotencyKey,
-    })) as Session;
+    return (await this.#transport.request(
+      "/v1/sessions",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+        },
+        body: JSON.stringify(body),
+      },
+      true,
+    )) as Session;
   }
 
   /**
@@ -89,8 +91,9 @@ class Sessions {
    */
   async result(id: string): Promise<Result> {
     return (await this.#transport.request(
-      "GET",
       `/v1/sessions/${encodeURIComponent(id)}/result`,
+      { method: "GET" },
+      true,
     )) as Result;
   }
 }
@@ -143,7 +146,11 @@ class Results {
 
   async #fetchKeys(): Promise<Map<string, KeyObject>> {
     this.#requestedAt = Date.now();
-    const jwks = await this.#transport.request("GET", "/.well-known/jwks.json");
+    const jwks = await this.#transport.request(
+      "/.well-known/jwks.json",
+      { method: "GET" },
+      true,
+    );
     return (this.#keys = es256Keys(jwks));
   }
 }
@@ -163,94 +170,4 @@ class Webhooks {
   ): WebhookEvent {
     return verifyWebhook(headers, rawBody, options.secret) as WebhookEvent;
   }
-}
-
-/** One idempotent call to the API, retried on 429 and 5xx within MAX_RETRIES (2.11). */
-class Transport {
-  readonly #apiKey: string;
-  readonly #baseUrl: string;
-
-  constructor(apiKey: string, baseUrl: string) {
-    this.#apiKey = apiKey;
-    this.#baseUrl = baseUrl.replace(/\/+$/, "");
-  }
-
-  async request(
-    method: "GET" | "POST",
-    path: string,
-    body?: unknown,
-    headers: Record<string, string> = {},
-  ): Promise<unknown> {
-    const sent: Record<string, string> = {
-      accept: "application/json",
-      ...headers,
-    };
-    // The key goes to /v1/ only, never to a public path such as the JWKS.
-    if (path.startsWith("/v1/")) {
-      sent["authorization"] = `Bearer ${this.#apiKey}`;
-    }
-    const init: RequestInit = { method, headers: sent };
-    if (body !== undefined) {
-      sent["content-type"] = "application/json";
-      init.body = JSON.stringify(body);
-    }
-    for (let retries = 0; ; retries += 1) {
-      const response = await fetch(this.#baseUrl + path, init);
-      if (response.ok) {
-        return await response.json();
-      }
-      const delay =
-        retries < MAX_RETRIES ? retryDelay(response, retries) : undefined;
-      if (delay === undefined) {
-        throw await apiError(response);
-      }
-      await response.body?.cancel();
-      await sleep(delay);
-    }
-  }
-}
-
-/** The wait before retrying `response`, or undefined when it is not retried. */
-function retryDelay(response: Response, retries: number): number | undefined {
-  if (response.status !== 429 && response.status < 500) {
-    return undefined;
-  }
-  const retryAfter = response.headers.get("retry-after")?.trim();
-  if (retryAfter) {
-    const seconds = /^\d+$/.test(retryAfter)
-      ? Number(retryAfter)
-      : (Date.parse(retryAfter) - Date.now()) / 1000;
-    if (!Number.isNaN(seconds)) {
-      const wait = Math.max(0, seconds * 1000);
-      return wait <= MAX_RETRY_AFTER_MS ? wait : undefined;
-    }
-  }
-  const backoff = BACKOFF_MS * 2 ** retries;
-  return backoff / 2 + (Math.random() * backoff) / 2;
-}
-
-/** The typed error for a non-2xx `response`, from its problem body (2.1). */
-async function apiError(response: Response): Promise<ApiError> {
-  let problem: Record<string, unknown> = {};
-  try {
-    const body: unknown = await response.json();
-    if (typeof body === "object" && body !== null) {
-      problem = body as Record<string, unknown>;
-    }
-  } catch {
-    // Not JSON, such as a proxy's error page: the status and the header remain.
-  }
-  const text = (value: unknown) =>
-    typeof value === "string" ? value : undefined;
-  const fields = {
-    code: text(problem.code),
-    detail: text(problem.detail),
-    requestId:
-      text(problem.request_id) ??
-      response.headers.get("zakadi-request-id") ??
-      undefined,
-  };
-  return fields.code === "result_pending"
-    ? new ResultPending(response.status, fields)
-    : new ApiError(response.status, fields);
 }
