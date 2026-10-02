@@ -1,4 +1,5 @@
-// The HTTP layer of spec/02-api.md 2.11, on fetch alone.
+// The HTTP layer of spec/02-api.md 2.11, on fetch alone, and `send`, the mutator through
+// which every function generated into src/generated/ reaches it (orval.config.js).
 import { setTimeout as sleep } from "node:timers/promises";
 import { ApiError, ResultPending } from "./errors.js";
 
@@ -8,6 +9,27 @@ const MAX_RETRIES = 2;
 const MAX_RETRY_AFTER_MS = 60_000;
 /** The first backoff without a Retry-After, jittered below it and doubled per retry. */
 const BACKOFF_MS = 500;
+
+/**
+ * The last argument of a generated function: the client's transport, and whether a 429
+ * or 5xx is retried, which only an idempotent call may be (2.11).
+ */
+export interface Call extends RequestInit {
+  transport?: Transport;
+  retry?: boolean;
+}
+
+/**
+ * The mutator of the generated functions: sends the request they build (method, path
+ * with its query, headers and JSON body) through `init.transport`.
+ */
+export function send<T>(url: string, init: Call): Promise<T> {
+  const { transport, retry = false, ...request } = init;
+  if (transport === undefined) {
+    throw new TypeError("send: a generated function needs a transport");
+  }
+  return transport.request(url, request, retry) as Promise<T>;
+}
 
 /** Calls to one API origin with one API key (2.1). */
 export class Transport {

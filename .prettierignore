@@ -1,0 +1,3 @@
+# The copy of api/openapi.yaml stays byte for byte as zakadi-server serves it, so that
+# its SHA-256 matches the pin of scripts/fetch-openapi.sh (D133).
+openapi/openapi.yaml

@@ -26,3 +26,6 @@ updates:
       # The Node types stay at the engines floor, Node 20, so no newer API slips in.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # orval stays at the version that wrote src/generated/: another one may write it
+      # differently, so a bump is a ticket that regenerates it.
+      - dependency-name: orval
