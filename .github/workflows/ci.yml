@@ -1,10 +1,12 @@
 # Zakadi repository standard: ci.yml for @zakadi/node (npm). The commands are the ones
 # in lefthook.yml, through the package scripts: format (prettier --check .), lint
-# (eslint . && tsc --noEmit), test (the unit tests, on Node 24 and on Node 20, the
-# engines floor) and test:integration (against a fake API on node:http). The lint job
-# ends with the scan (CI only, references/GITHUB.md of the standard): the licence of
-# every production dependency, from npm query, against the excluded list of spec 00
-# 0.10, then npm audit over the same dependencies.
+# (eslint . && tsc --noEmit, then the lines of the lint-generated hook job: the OpenAPI
+# copy against its pin and src/generated/ against what npm run generate writes from
+# it), test (the unit tests, on Node 24 and on Node 20, the engines floor) and
+# test:integration (against a fake API on node:http). The lint job ends with the scan
+# (CI only, references/GITHUB.md of the standard): the licence of every production
+# dependency, from npm query, against the excluded list of spec 00 0.10, then npm audit
+# over the same dependencies.
 name: ci
 
 on:
@@ -41,6 +43,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      # The OpenAPI copy against its pin (D133), and src/generated/ against what
+      # npm run generate writes from it (D84): the lint-generated job of lefthook.yml.
+      - name: generated
+        run: |
+          set -eu
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          git checkout-index --all --prefix="$tmp/index/"
+          git checkout-index --all --prefix="$tmp/generated/"
+          sh "$tmp/index/scripts/fetch-openapi.sh" --check
+          ln -s "$PWD/node_modules" "$tmp/generated/node_modules"
+          (cd "$tmp/generated" && npm run --silent generate)
+          diff -r "$tmp/index/src/generated" "$tmp/generated/src/generated"
       - name: scan
         shell: bash
         env:
