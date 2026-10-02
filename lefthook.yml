@@ -20,6 +20,20 @@ pre-commit:
           - name: lint
             glob: "*.{ts,tsx,js,mjs,cjs}"
             run: npx --no -- eslint {staged_files}
+          # The OpenAPI copy against its pin, and src/generated/ against what
+          # npm run generate writes from it (D84, D133), both as staged: two copies of
+          # the index in a temporary directory, so the tree is never written.
+          - name: lint-generated
+            run: |
+              set -eu
+              tmp="$(mktemp -d)"
+              trap 'rm -rf "$tmp"' EXIT
+              git checkout-index --all --prefix="$tmp/index/"
+              git checkout-index --all --prefix="$tmp/generated/"
+              sh "$tmp/index/scripts/fetch-openapi.sh" --check
+              ln -s "$PWD/node_modules" "$tmp/generated/node_modules"
+              (cd "$tmp/generated" && npm run --silent generate)
+              diff -r "$tmp/index/src/generated" "$tmp/generated/src/generated"
 
 commit-msg:
   # git writes the message on merge and rebase.
