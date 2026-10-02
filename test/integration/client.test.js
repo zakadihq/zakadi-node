@@ -11,8 +11,13 @@ import {
   Zakadi,
 } from "@zakadi/node";
 import {
+  DELIVERIES,
+  JOB,
   SESSION,
   SESSION_REQUEST,
+  WEBHOOK,
+  WEBHOOK_CREATE,
+  WEBHOOK_UPDATE,
   result,
   resultClaims,
   signToken,
@@ -176,6 +181,112 @@ describe("@zakadi/node against a fake API on node:http", () => {
     t.mock.timers.tick(60_000);
     await Promise.all([verify(k2), verify(k2), verify(k1), verify(k2)]);
     assert.equal(api.requests.length, 2);
+  });
+
+  it("manages a webhook endpoint: a create retried under one key, then list, get, update, deliveries, delete and a 404", async () => {
+    const path = `/v1/webhooks/${WEBHOOK.webhook_id}`;
+    let creates = 0;
+    let deleted = false;
+    api.reply = (request) => {
+      switch (`${request.method} ${request.path}`) {
+        case "POST /v1/webhooks":
+          creates += 1;
+          return creates === 1
+            ? problem(503, "internal_error", { "retry-after": "0" })
+            : { status: 201, body: WEBHOOK };
+        case "GET /v1/webhooks":
+          return { body: { data: [WEBHOOK] } };
+        case `GET ${path}`:
+          return deleted
+            ? problem(404, "webhook_not_found")
+            : { body: WEBHOOK };
+        case `PUT ${path}`:
+          return { body: { ...WEBHOOK, ...JSON.parse(request.body) } };
+        case `GET ${path}/deliveries?cursor=ZXZ0XzAx&limit=10`:
+          return { body: DELIVERIES };
+        case `DELETE ${path}`:
+          deleted = true;
+          return { status: 204 };
+        default:
+          return problem(400, "validation_error");
+      }
+    };
+    const zakadi = client();
+    const id = WEBHOOK.webhook_id;
+    assert.deepEqual(await zakadi.webhooks.create(WEBHOOK_CREATE), WEBHOOK);
+    assert.deepEqual(await zakadi.webhooks.list(), { data: [WEBHOOK] });
+    assert.deepEqual(await zakadi.webhooks.get(id), WEBHOOK);
+    assert.deepEqual(await zakadi.webhooks.update(id, WEBHOOK_UPDATE), {
+      ...WEBHOOK,
+      ...WEBHOOK_UPDATE,
+    });
+    assert.deepEqual(
+      await zakadi.webhooks.deliveries(id, { cursor: "ZXZ0XzAx", limit: 10 }),
+      DELIVERIES,
+    );
+    assert.equal(await zakadi.webhooks.delete(id), undefined);
+    await assert.rejects(zakadi.webhooks.get(id), {
+      name: "ApiError",
+      status: 404,
+      code: "webhook_not_found",
+      requestId: "req_webhook_not_found",
+    });
+    const [first, second] = api.requests;
+    assert.deepEqual(JSON.parse(first.body), WEBHOOK_CREATE);
+    assert.equal(second.body, first.body);
+    assert.match(first.headers["idempotency-key"], UUID);
+    assert.equal(
+      second.headers["idempotency-key"],
+      first.headers["idempotency-key"],
+    );
+    assert.equal(api.requests.length, 8);
+    for (const request of api.requests) {
+      assert.equal(request.headers.authorization, "Bearer zk_test_key");
+    }
+  });
+
+  it("purges a session, answered 202 without a body, and a subject, whose 503 is not retried", async () => {
+    let purges = 0;
+    const done = {
+      ...JOB,
+      status: "succeeded",
+      completed_at: "2026-09-22T13:00:41Z",
+    };
+    api.reply = (request) => {
+      switch (`${request.method} ${request.path}`) {
+        case "DELETE /v1/sessions/ses_01J8":
+          return { status: 202 };
+        case "POST /v1/subjects/purge":
+          purges += 1;
+          return purges === 1
+            ? problem(503, "internal_error", { "retry-after": "0" })
+            : { status: 202, body: JOB };
+        case `GET /v1/jobs/${JOB.job_id}`:
+          return { body: done };
+        default:
+          return problem(400, "validation_error");
+      }
+    };
+    const zakadi = client();
+    assert.equal(await zakadi.sessions.purge("ses_01J8"), undefined);
+    const subject = { user_ref: "cust-88213" };
+    await assert.rejects(zakadi.subjects.purge(subject), {
+      name: "ApiError",
+      status: 503,
+      code: "internal_error",
+    });
+    assert.deepEqual(await zakadi.subjects.purge(subject), JOB);
+    assert.deepEqual(await zakadi.jobs.get(JOB.job_id), done);
+    assert.deepEqual(
+      api.requests.map((r) => `${r.method} ${r.path}`),
+      [
+        "DELETE /v1/sessions/ses_01J8",
+        "POST /v1/subjects/purge",
+        "POST /v1/subjects/purge",
+        `GET /v1/jobs/${JOB.job_id}`,
+      ],
+    );
+    assert.deepEqual(JSON.parse(api.requests[2].body), subject);
   });
 
   it("verifies a webhook delivered to a node:http receiver", async (t) => {

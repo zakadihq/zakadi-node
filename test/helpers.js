@@ -65,6 +65,160 @@ export const SESSION = {
   status: "created",
 };
 
+/** A session's status and timestamps, the 200 body of `GET /v1/sessions/{id}` (2.2). */
+export const SESSION_STATUS = {
+  session_id: "ses_01J8",
+  status: "passed",
+  created_at: "2026-09-22T10:00:00Z",
+  connected_at: "2026-09-22T10:00:21Z",
+  ended_at: "2026-09-22T10:00:58Z",
+  verdict_at: "2026-09-22T10:01:12Z",
+  policy_version: 12,
+  channel: "android",
+  ingest_region: "af-south-1",
+  band: "A",
+  metadata: { flow: "onboarding", attempt: 1 },
+};
+
+/** The 200 body of `GET /v1/sessions/{id}/evidence` (2.3). */
+export const EVIDENCE = {
+  session_id: "ses_01J8",
+  scores: { pad_ensemble: 0.991, nonce_reader: 0.62 },
+  forensics: { qp_mean: 27.4 },
+  timing: { action_latency_ms: { p50: 775, max: 910 } },
+  challenges: [
+    {
+      idx: 0,
+      id: "a1",
+      kind: "head_turn",
+      params: { direction: "user_left", min_deg: 20, hold_ms: 200 },
+      result: "pass",
+      attempts: 1,
+      latency_ms: 640,
+      scores: { geometry: 0.98 },
+    },
+  ],
+  audit_frames: [
+    {
+      url: "https://objects-afs1.zakadi.dev/evidence/ses_01J8/frame-1?signature=7d1c",
+      expires_at: "2026-09-22T10:30:00Z",
+    },
+  ],
+  clip: null,
+  expires_at: "2026-09-29T10:01:12Z",
+};
+
+/** The job of `POST /v1/subjects/purge` and `GET /v1/jobs/{id}` (2.3). */
+export const JOB = {
+  job_id: "job_01J8",
+  kind: "subject_purge",
+  status: "pending",
+  created_at: "2026-09-22T13:00:00Z",
+  completed_at: null,
+};
+
+/** The body of `POST /v1/webhooks` (2.4). */
+export const WEBHOOK_CREATE = {
+  url: "https://rp.example/liveness/hook",
+  events: ["zakadi.session.completed", "zakadi.session.aborted"],
+  secret: "whsec_0123456789abcdef0123456789abcdef",
+  active: true,
+};
+
+/** The body of `PUT /v1/webhooks/{id}` (2.4). */
+export const WEBHOOK_UPDATE = {
+  url: "https://rp.example/liveness/hook",
+  events: ["zakadi.session.completed"],
+  active: false,
+};
+
+/** A webhook endpoint as the API returns it, without its secret (2.4). */
+export const WEBHOOK = {
+  webhook_id: "0b7c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d",
+  url: "https://rp.example/liveness/hook",
+  events: ["zakadi.session.completed", "zakadi.session.aborted"],
+  secret_ref: "wh_sec_01",
+  active: true,
+  created_at: "2026-09-21T16:40:00Z",
+};
+
+/** The 200 body of `GET /v1/webhooks/{id}/deliveries` (2.4). */
+export const DELIVERIES = {
+  data: [
+    {
+      webhook_id: "0b7c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d",
+      event_id: "evt_01J8",
+      attempt: 1,
+      status: null,
+      error: "no response within 10 s",
+      at: "2026-09-22T10:01:14Z",
+    },
+  ],
+  next_cursor: null,
+};
+
+/** The body of `PUT /v1/tenants/{id}/policy` (2.5). */
+export const POLICY_SETTINGS = {
+  actions: {
+    min: 2,
+    max: 3,
+    pool: ["head_turn", "distance", "fingers", "digits", "blink", "expression"],
+    step_up_pool: ["hand_over_face", "look_profile"],
+    require_geometry: true,
+    require_high_entropy: true,
+  },
+  assurance: {
+    accept_bands: ["A", "B"],
+    web_allowed: true,
+    attestation_required: false,
+  },
+  thresholds: { profile: "strict" },
+  attempts: {
+    per_action: 3,
+    restarts: 2,
+    sessions_per_user_ref_per_day: 10,
+    sessions_per_face_per_day: 10,
+  },
+  step_up: { enabled: true, human_handoff: false, handoff_url: null },
+  languages: ["en-NG", "fr-CI", "ha-NG"],
+  retention: {
+    results_days: 365,
+    evidence_days_default: 7,
+    evidence_days_max: 30,
+    evidence_clip_allowed: false,
+    embeddings_days: 30,
+  },
+  dedupe: { enabled: true, cross_session_face_match: true },
+  residency: {
+    ingest_regions: ["eu-west-2", "af-south-1"],
+    gpu_regions: ["af-south-1"],
+    in_country_only: false,
+  },
+  ui: {
+    character: "default",
+    brand: { primary: "#0A5", logo_url: null },
+    badge_text: null,
+  },
+};
+
+/** The tenant policy with its version (2.5). */
+export const POLICY = { version: 13, ...POLICY_SETTINGS };
+
+/** The 200 body of `GET /v1/tenants/{id}/usage` (2.7). */
+export const USAGE = {
+  from: "2026-09-21",
+  to: "2026-09-22",
+  data: [
+    {
+      day: "2026-09-21",
+      channel: "android",
+      band: "A",
+      status: "passed",
+      count: 1204,
+    },
+  ],
+};
+
 /** The 200 body of 2.3 around `result_token`. */
 export function result(resultToken) {
   return {
